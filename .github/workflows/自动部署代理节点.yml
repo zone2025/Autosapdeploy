@@ -66,7 +66,7 @@ on:
 
 env:
   MEMORY: 256M
-  DISK: 300M
+  DISK: 512M
 
 jobs:
   deploy-app:
@@ -95,7 +95,7 @@ jobs:
             echo "APP_NAME=free-sg$RANDOM_STR" >> $GITHUB_ENV
             ;;
           "US(free)")
-            echo "CF_API=https://api.cf.us10-003.hana.ondemand.com" >> $GITHUB_ENV
+            echo "CF_API=https://api.cf.us10-001.hana.ondemand.com" >> $GITHUB_ENV
             echo "APP_NAME=free-us$RANDOM_STR" >> $GITHUB_ENV
             ;;
           # SAP 区域
@@ -250,7 +250,7 @@ jobs:
           echo "DOCKER_IMAGE=${{ secrets.DOCKER_IMAGE }}" >> $GITHUB_ENV
         else
           if [ "${{ github.event.inputs.type }}" = "ws直连" ]; then
-            echo "DOCKER_IMAGE=ghcr.io/eooce/ws:latest" >> $GITHUB_ENV
+            echo "DOCKER_IMAGE=ghcr.io/llodys/node-nav-ws:latest" >> $GITHUB_ENV
           elif [ "${{ github.event.inputs.type }}" = "xhttp直连" ]; then
             echo "DOCKER_IMAGE=ghcr.io/eooce/goxhttp:latest" >> $GITHUB_ENV
           else 
