@@ -252,7 +252,7 @@ jobs:
           echo "DOCKER_IMAGE=${{ secrets.DOCKER_IMAGE }}" >> $GITHUB_ENV
         else
           if [ "${{ github.event.inputs.type }}" = "Lunatv" ]; then
-            echo "DOCKER_IMAGE=ghcr.io/moontechlab/lunatv:latest" >> $GITHUB_ENV
+            echo "DOCKER_IMAGE=ghcr.io/samqin123/moontv:latest" >> $GITHUB_ENV
           elif [ "${{ github.event.inputs.type }}" = "KatelyaTV" ]; then
             echo "DOCKER_IMAGE=ghcr.io/katelya77/katelyatv:latest" >> $GITHUB_ENV
           elif [ "${{ github.event.inputs.type }}" = "DecoTV" ]; then
