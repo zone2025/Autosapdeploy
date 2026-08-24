@@ -1,0 +1,226 @@
+name: 自动部署代理到Anynines
+
+on:
+  workflow_dispatch:  # 只允许手动触发
+    inputs:
+      type:
+        description: '选择部署的节点类型'
+        required: true
+        default: 'Argo隧道节点'
+        type: choice
+        options:
+          - ws直连节点
+          - Argo隧道节点
+      EMAIL:
+        description: 'EMAIL(Anynines邮箱必填)'
+        required: true
+        default: ''
+      PASSWORD:
+        description: 'PASSWORD(Anynines密码必填)'
+        required: true
+        default: ''
+      app_name:
+        description: '应用名称（可选，留空则自动生成）'
+        required: false
+        default: ''
+      UUID:
+        description: 'UUID(可选，留空将使用默认值,节点和哪吒v1共用)'
+        required: false
+        default: ''
+      NEZHA_SERVER:
+        description: 'NEZHA_SERVER(v1:nezha.xxx.com:8008, v0:nezha.xxx.com)'
+        required: false
+        default: ''
+      NEZHA_PORT:
+        description: 'NEZHA_PORT(v1留空,仅v0)'
+        required: false
+        default: ''
+      NEZHA_KEY:
+        description: 'NEZHA-KEY(须和NEZHA_SERVER一起填写)'
+        required: false
+        default: ''
+      ARGO_DOMAIN:
+        description: 'ARGO_DOMAIN(可选,留空将使用临时)'
+        required: false
+        default: ''
+      ARGO_PORT:
+        description: 'ARGO_PORT(可选,留空使用8001)'
+        required: false
+        default: ''
+      ARGO_AUTH:
+        description: 'ARGO_AUTH(必须和ARGO_DOMAIN一起填写)'
+        required: false
+        default: ''
+      SUB_PATH:
+        description: 'SUB_PATH(订阅token,可选,留空使用sub,用于获取节点,务必记好)'
+        required: false
+        default: ''
+
+env:
+  MEMORY: 256M
+  DISK: 300M
+
+jobs:
+  deploy-app:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: 安装 Anynines CLI
+      run: |
+        wget -q -O - https://packages.cloudfoundry.org/debian/cli.cloudfoundry.org.key | sudo apt-key add -
+        echo "deb https://packages.cloudfoundry.org/debian stable main" | sudo tee /etc/apt/sources.list.d/cloudfoundry-cli.list
+        sudo apt-get update
+        sudo apt-get install -y cf8-cli
+    - name: 生成app名称和选择docker镜像
+      run: |
+        # 设置API端点和生成随机字符串名称
+        RANDOM_STR=$(head /dev/urandom | tr -dc 'a-z' | head -c 8)
+        APP_NAME="$RANDOM_STR"
+        # 如果用户提供了应用名称，则使用用户提供的
+        if [ -n "${{ github.event.inputs.app_name }}" ]; then
+          APP_NAME="${{ github.event.inputs.app_name }}"
+        fi
+        echo "APP_NAME=$APP_NAME" >> "$GITHUB_ENV"
+        # 如果自定义了docker镜像变量则使用定义的，否则按照选择的
+        if [[ -n "${{ secrets.DOCKER_IMAGE }}" ]]; then
+          DOCKER_IMAGE="${{ secrets.DOCKER_IMAGE }}"
+        else
+          if [ "${{ github.event.inputs.type }}" = "ws直连节点" ]; then
+            DOCKER_IMAGE="ghcr.io/eooce/ws:latest"
+          else
+            DOCKER_IMAGE="ghcr.io/eooce/nodejs:latest"
+          fi
+        fi
+        echo "DOCKER_IMAGE=$DOCKER_IMAGE" >> "$GITHUB_ENV"
+        echo "应用名称: $APP_NAME"
+        echo "部署类型: $DOCKER_IMAGE"
+    - name: 登录 Anynines CLI
+      run: |
+        USER="${{ github.event.inputs.EMAIL }}"
+        PASSWORD="${{ github.event.inputs.PASSWORD }}"
+
+        cf login -a "https://api.de.a9s.eu" -u "$USER" -p "$PASSWORD"
+        # 获取组织列表
+        ORG=$(cf orgs | sed -n '4p')
+        echo "Selected org: $ORG"
+        echo "ORG=$ORG" >> $GITHUB_ENV
+        # 获取空间列表
+        SPACE=$(cf spaces | sed -n '4p')
+        if [ -z "$SPACE" ]; then
+          cf create-space dev
+          SPACE="dev"
+        else
+          echo "Selected space: $SPACE"
+        fi
+        
+        cf target -o "$ORG" -s "$SPACE"
+    - name: 部署app
+      run: |
+        if cf push ${{ env.APP_NAME }} --docker-image ${{ env.DOCKER_IMAGE }} -m ${{ env.MEMORY }} -k ${{ env.DISK }} --health-check-type port; then
+          echo "Deployment successful"
+        else
+          cf delete ${{ env.APP_NAME }} -r -f
+          echo "部署失败了，"
+          exit 1
+        fi
+        
+    - name: 设置app环境变量
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        set_optional_env() {
+          local key="$1"
+          local value="$2"
+          if [ -n "$value" ]; then
+            cf set-env "${{ env.APP_NAME }}" "$key" "$value"
+            echo "已设置 $key"
+          else
+            echo "跳过空值 $key"
+          fi
+        }
+
+        UUID_INPUT="${{ github.event.inputs.UUID }}"
+        NEZHA_SERVER_INPUT="${{ github.event.inputs.NEZHA_SERVER }}"
+        NEZHA_PORT_INPUT="${{ github.event.inputs.NEZHA_PORT }}"
+        NEZHA_KEY_INPUT="${{ github.event.inputs.NEZHA_KEY }}"
+        ARGO_PORT_INPUT="${{ github.event.inputs.ARGO_PORT }}"
+        ARGO_DOMAIN_INPUT="${{ github.event.inputs.ARGO_DOMAIN }}"
+        ARGO_AUTH_INPUT="${{ github.event.inputs.ARGO_AUTH }}"
+        SUB_PATH_INPUT="${{ github.event.inputs.SUB_PATH }}"
+
+        # 基础环境变量
+        cf set-env "${{ env.APP_NAME }}" NAME "Anynines"
+        set_optional_env "UUID" "${UUID_INPUT:-${{ secrets.UUID }}}"
+        set_optional_env "NEZHA_SERVER" "${NEZHA_SERVER_INPUT:-${{ secrets.NEZHA_SERVER }}}"
+        set_optional_env "NEZHA_PORT" "${NEZHA_PORT_INPUT:-${{ secrets.NEZHA_PORT }}}"
+        set_optional_env "NEZHA_KEY" "${NEZHA_KEY_INPUT:-${{ secrets.NEZHA_KEY }}}"
+        set_optional_env "ARGO_PORT" "${ARGO_PORT_INPUT:-${{ secrets.ARGO_PORT }}}"
+        if [ -z "${ARGO_PORT_INPUT:-${{ secrets.ARGO_PORT }}}" ]; then
+          set_optional_env "ARGO_PORT" "8001"
+        fi
+        set_optional_env "ARGO_DOMAIN" "${ARGO_DOMAIN_INPUT:-${{ secrets.ARGO_DOMAIN }}}"
+        set_optional_env "ARGO_AUTH" "${ARGO_AUTH_INPUT:-${{ secrets.ARGO_AUTH }}}"
+        set_optional_env "SUB_PATH" "${SUB_PATH_INPUT:-${{ secrets.SUB_PATH }}}"
+        if [ -n "${{ secrets.CFIP }}" ]; then
+          set_optional_env "CFIP" "${{ secrets.CFIP }}"
+        else
+          set_optional_env "CFIP" "cf.877774.xyz"
+        fi
+        set_optional_env "CFPORT" "${{ secrets.CFPORT }}"
+        set_optional_env "CHAT_ID" "${{ secrets.CHAT_ID }}"
+        set_optional_env "BOT_TOKEN" "${{ secrets.BOT_TOKEN }}"
+
+        # 如果 DOCKER_IMAGE 中否包含 xhttp、goxhttp、ws 等关键词说明为直连镜像
+        if [[ "${{ env.DOCKER_IMAGE }}" =~ (xhttp|goxhttp|ws) ]]; then
+          ROUTE=$(cf app "${{ env.APP_NAME }}" | grep "routes:" | awk '{print $2}')
+          if [ -n "$ROUTE" ]; then
+            echo "设置 DOMAIN 环境变量为: $ROUTE"
+            cf set-env "${{ env.APP_NAME }}" DOMAIN "$ROUTE"
+          else
+            echo "⚠️ 未找到应用路由，无法设置 DOMAIN,请手动将节点里的address、host和sni改为应用域名"
+          fi
+        fi
+        
+    - name: 重启app
+      run: |
+        cf restage ${{ env.APP_NAME }}
+    - name: Verify deployment
+      run: |
+        cf app ${{ env.APP_NAME }}
+        echo "Deployment completed successfully!"
+    - name: 详细部署信息
+      run: |
+        echo "🚀 部署完成！详细信息如下："
+        echo "组织(ORG): ${{ env.ORG }}"
+        echo "空间(SPACE): ${{ env.SPACE }}"
+        echo "应用名称(App Name): ${{ env.APP_NAME }}"
+        # 获取应用路由
+        ROUTE=$(cf app ${{ env.APP_NAME }} | grep "routes:" | awk '{print $2}')
+        if [ -n "$ROUTE" ]; then
+          echo "App url: https://$ROUTE"
+          echo "节点订阅链接: https://$ROUTE/{SUB_PATH}  (请将 {SUB_PATH} 改为实际的订阅路径获取)"
+        else
+          echo "⚠️ 未找到应用路由，请检查部署状态。"
+        fi
+
+    - name: 清理旧的工作流运行记录
+      if: always()
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+        count=0
+        for run_id in $runs; do
+          count=$((count + 1))
+          if [ $count -gt 1 ]; then
+            echo "删除运行记录: $run_id"
+            gh run delete $run_id || true
+          fi
+        done
